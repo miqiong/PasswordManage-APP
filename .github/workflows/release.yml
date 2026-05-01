@@ -1,0 +1,126 @@
+# 仅在推送到 main 成功后：使用仓库 Secrets 中的固定签名打 release APK，并自动创建 tag + GitHub Release。
+# Tag 格式：v{versionName}-b{run_number}。同一 keystore 可覆盖安装升级，保留应用数据。
+#
+# 请在仓库 Settings → Secrets and variables → Actions 中配置（均为必填，否则本 workflow 会失败）：
+#   ANDROID_KEYSTORE_B64   — upload keystore 文件经 base64 后的整串（Linux: base64 -w0 my.jks）
+#   ANDROID_STORE_PASSWORD — keystore 密码
+#   ANDROID_KEY_ALIAS      — 密钥别名
+#   ANDROID_KEY_PASSWORD   — 密钥密码
+#
+# 不再使用 workflow_dispatch / push.tags，避免双触发。
+
+name: Android APK 发布
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: app-release-${{ github.repository }}-main
+  cancel-in-progress: true
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 校验签名 Secrets
+        shell: bash
+        env:
+          B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          SP: ${{ secrets.ANDROID_STORE_PASSWORD }}
+          AL: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KP: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -e
+          if [ -z "$B64" ] || [ -z "$SP" ] || [ -z "$AL" ] || [ -z "$KP" ]; then
+            echo "::error::缺少签名 Secret：请在仓库 Settings → Secrets 配置 ANDROID_KEYSTORE_B64、ANDROID_STORE_PASSWORD、ANDROID_KEY_ALIAS、ANDROID_KEY_PASSWORD（详见本 workflow 顶部注释）"
+            exit 1
+          fi
+
+      - name: 从 app/build.gradle.kts 解析 versionName 并生成 tag
+        id: meta
+        shell: bash
+        run: |
+          set -e
+          VNAME=$(grep -E "versionName\s*=" app/build.gradle.kts | head -1 | sed -E "s/.*[\"']([^\"']+)[\"'].*/\1/")
+          if [ -z "$VNAME" ]; then echo "::error::无法解析 versionName"; exit 1; fi
+          TAG="v${VNAME}-b${GITHUB_RUN_NUMBER}"
+          echo "TAG=$TAG" >> "$GITHUB_OUTPUT"
+          echo "VNAME=$VNAME" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: 写入 release 签名（固定证书，便于升级保留数据）
+        shell: bash
+        env:
+          ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          ANDROID_STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -e
+          echo "$ANDROID_KEYSTORE_B64" | base64 -d > app/release-ci.jks
+          cat > keystore.properties << EOF
+          storeFile=app/release-ci.jks
+          storePassword=$ANDROID_STORE_PASSWORD
+          keyAlias=$ANDROID_KEY_ALIAS
+          keyPassword=$ANDROID_KEY_PASSWORD
+          EOF
+
+      - name: 授予 gradlew 执行权限
+        run: chmod +x gradlew
+
+      - name: Gradle 构建（Release APK）
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-home-cache-strict: true
+
+      - name: assembleRelease
+        run: ./gradlew :app:assembleRelease --no-daemon --stacktrace
+
+      - name: 复制 APK、清理签名文件、生成 Release 说明
+        id: pack
+        shell: bash
+        env:
+          APK: PasswordManage-APP-${{ steps.meta.outputs.VNAME }}-release.apk
+        run: |
+          set -e
+          SRC="app/build/outputs/apk/release/app-release.apk"
+          cp "$SRC" "$APK"
+          echo "APK_PATH=$APK" >> "$GITHUB_OUTPUT"
+          rm -f app/release-ci.jks keystore.properties
+          cat > release-notes.md << EOF
+          ## 密码库 Android ${{ steps.meta.outputs.TAG }}
+
+          ### 内容说明
+          - **APK**：\`$APK\`（**Release + 仓库固定签名**），与上一版 **同一签名、同一 applicationId** 时可 **覆盖安装**，应用私有目录数据（含数据库）默认 **保留**。
+          - **versionName**：${{ steps.meta.outputs.VNAME }}（与 \`app/build.gradle.kts\` 一致）。
+
+          ### 升级与数据
+          - 请勿先卸载再安装（卸载会清除本机数据）。
+          - 若更换签名或包名，系统会视为新应用，无法直接覆盖升级。
+
+          ### 构建
+          - 推送 \`main\` 后由 Actions 自动生成本 tag 与 Release。
+          EOF
+
+      - name: 创建 Release 与 tag
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          TAG="${{ steps.meta.outputs.TAG }}"
+          APK="${{ steps.pack.outputs.APK_PATH }}"
+          TITLE="密码库 Android ${TAG}"
+          gh release create "$TAG" "$APK" --title "$TITLE" --notes-file release-notes.md --target '${{ github.sha }}'

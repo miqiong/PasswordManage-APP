@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.Vault" parent="Theme.Material3.Light.NoActionBar">
+        <item name="android:statusBarColor">@color/vault_bg</item>
+        <item name="android:navigationBarColor">@color/vault_bg</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:colorBackground">@color/vault_bg</item>
+        <item name="colorPrimary">@color/vault_accent</item>
+        <item name="colorOnPrimary">#FFFFFFFF</item>
+        <item name="colorSurface">@color/vault_bg</item>
+    </style>
+</resources>

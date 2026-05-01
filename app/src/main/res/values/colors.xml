@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="vault_bg">#FFF7F7F8</color>
+    <color name="vault_fg">#FF1A1A1A</color>
+    <color name="vault_muted">#FF6B6B6B</color>
+    <color name="vault_accent">#FF2563EB</color>
+    <color name="vault_error">#FFB91C1C</color>
+    <color name="vault_border">#FFE8E8EA</color>
+</resources>

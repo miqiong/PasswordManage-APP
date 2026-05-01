@@ -1,0 +1,2 @@
+-keep class com.google.crypto.tink.** { *; }
+-keep class org.bouncycastle.** { *; }
