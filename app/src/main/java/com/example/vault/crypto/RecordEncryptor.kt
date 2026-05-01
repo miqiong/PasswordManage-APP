@@ -3,8 +3,6 @@ package com.example.vault.crypto
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.decodeFromStream
-import java.io.ByteArrayInputStream
 
 /**
  * PRD §三：payload 用 DEK；DEK 用 KEK 包装；AAD 含 record_id|version|updated_at。
@@ -79,7 +77,8 @@ class RecordEncryptor(
             dek = crypto.unwrapDek(kek, row.dekNonce, row.dekWrapped, aad)
             val plainBytes = crypto.open(dek, row.payloadNonce, row.encryptedPayload, aad)
             try {
-                json.decodeFromStream(PlainRecord.serializer(), ByteArrayInputStream(plainBytes))
+                val plainJson = plainBytes.toString(Charsets.UTF_8)
+                json.decodeFromString(PlainRecord.serializer(), plainJson)
             } finally {
                 SecureMemoryUtils.wipe(plainBytes)
             }

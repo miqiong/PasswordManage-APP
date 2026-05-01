@@ -1,2 +1,3 @@
 -keep class com.google.crypto.tink.** { *; }
 -keep class org.bouncycastle.** { *; }
+-dontwarn javax.naming.**
