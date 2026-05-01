@@ -83,49 +83,55 @@ class MainActivity : AppCompatActivity() {
         val pwd = pwdText.toByteArray(Charsets.UTF_8)
         try {
             val mpv = MasterPasswordVerifier()
-            if (!vaultExists) {
-                val salt = ByteArray(16).also { SecureRandom().nextBytes(it) }
-                try {
-                    val (kek, verifier) = mpv.deriveKekAndVerifier(pwd, salt)
+            try {
+                if (!vaultExists) {
+                    val salt = ByteArray(16).also { SecureRandom().nextBytes(it) }
                     try {
-                        metaStore.write(salt, verifier)
-                        openVault(kek, mpv)
-                    } finally {
-                        SecureMemoryUtils.wipe(verifier)
-                        SecureMemoryUtils.wipe(kek)
-                    }
-                } finally {
-                    SecureMemoryUtils.wipe(salt)
-                }
-            } else {
-                val meta = metaStore.read()
-                if (meta == null) {
-                    textError.text = "无法读取保管库元数据"
-                    textError.visibility = View.VISIBLE
-                    return
-                }
-                val (salt, verifier) = meta
-                try {
-                    if (!mpv.verifyMasterPassword(pwd, salt, verifier)) {
-                        textError.text = "主密码错误"
-                        textError.visibility = View.VISIBLE
-                        return
-                    }
-                    val mk = mpv.deriveMasterKey(pwd, salt)
-                    try {
-                        val kek = mpv.deriveKek(mk)
+                        val (kek, verifier) = mpv.deriveKekAndVerifier(pwd, salt)
                         try {
+                            metaStore.write(salt, verifier)
                             openVault(kek, mpv)
                         } finally {
+                            SecureMemoryUtils.wipe(verifier)
                             SecureMemoryUtils.wipe(kek)
                         }
                     } finally {
-                        SecureMemoryUtils.wipe(mk)
+                        SecureMemoryUtils.wipe(salt)
                     }
-                } finally {
-                    SecureMemoryUtils.wipe(salt)
-                    SecureMemoryUtils.wipe(verifier)
+                } else {
+                    val meta = metaStore.read()
+                    if (meta == null) {
+                        textError.text = "无法读取保管库元数据"
+                        textError.visibility = View.VISIBLE
+                        return
+                    }
+                    val (salt, verifier) = meta
+                    try {
+                        if (!mpv.verifyMasterPassword(pwd, salt, verifier)) {
+                            textError.text = "主密码错误"
+                            textError.visibility = View.VISIBLE
+                            return
+                        }
+                        val mk = mpv.deriveMasterKey(pwd, salt)
+                        try {
+                            val kek = mpv.deriveKek(mk)
+                            try {
+                                openVault(kek, mpv)
+                            } finally {
+                                SecureMemoryUtils.wipe(kek)
+                            }
+                        } finally {
+                            SecureMemoryUtils.wipe(mk)
+                        }
+                    } finally {
+                        SecureMemoryUtils.wipe(salt)
+                        SecureMemoryUtils.wipe(verifier)
+                    }
                 }
+            } catch (_: Exception) {
+                // 避免异常直接导致闪退，向用户展示可恢复错误
+                textError.text = "解锁失败，请重试"
+                textError.visibility = View.VISIBLE
             }
         } finally {
             SecureMemoryUtils.wipe(pwd)
