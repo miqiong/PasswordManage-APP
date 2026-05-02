@@ -127,21 +127,34 @@ class MainActivity : AppCompatActivity() {
                                 SecureMemoryUtils.wipe(verifier)
                             }
                         }
-                    } catch (_: Exception) {
-                        UnlockOutcome.Err("解锁失败，请重试")
+                    } catch (t: Throwable) {
+                        if (t is CancellationException) throw t
+                        when (t) {
+                            is OutOfMemoryError ->
+                                UnlockOutcome.Err("内存不足，请关闭其他应用后重试")
+                            is LinkageError ->
+                                UnlockOutcome.Err("运行环境异常，请重装或更新应用后重试")
+                            else ->
+                                UnlockOutcome.Err("解锁失败，请重试")
+                        }
                     }
                 }
-                when (outcome) {
-                    is UnlockOutcome.Ok -> {
-                        (application as VaultApp).session = outcome.session
-                        panelUnlock.visibility = View.GONE
-                        panelList.visibility = View.VISIBLE
-                        reloadList()
+                try {
+                    when (outcome) {
+                        is UnlockOutcome.Ok -> applyUnlockSuccess(outcome.session)
+                        is UnlockOutcome.Err -> {
+                            textError.text = outcome.message
+                            textError.visibility = View.VISIBLE
+                        }
                     }
-                    is UnlockOutcome.Err -> {
-                        textError.text = outcome.message
-                        textError.visibility = View.VISIBLE
+                } catch (t: Throwable) {
+                    if (t is CancellationException) throw t
+                    try {
+                        if (outcome is UnlockOutcome.Ok) outcome.session.lock()
+                    } catch (_: Exception) {
                     }
+                    textError.text = "解锁后界面异常，请重试"
+                    textError.visibility = View.VISIBLE
                 }
             } finally {
                 SecureMemoryUtils.wipe(pwd)
@@ -149,6 +162,20 @@ class MainActivity : AppCompatActivity() {
                 btnPrimary.isEnabled = true
             }
         }
+    }
+
+    private fun applyUnlockSuccess(session: VaultSession) {
+        val app = application as? VaultApp
+        if (app == null) {
+            session.lock()
+            textError.text = "应用状态异常，请重启"
+            textError.visibility = View.VISIBLE
+            return
+        }
+        app.session = session
+        panelUnlock.visibility = View.GONE
+        panelList.visibility = View.VISIBLE
+        reloadList()
     }
 
     private fun openVaultSession(kek: ByteArray, mpv: MasterPasswordVerifier): VaultSession {
@@ -183,7 +210,7 @@ class MainActivity : AppCompatActivity() {
                             val plain = session.enc.decrypt(row, session.kek)
                             plain.title.ifBlank { row.recordId }
                         }
-                    } catch (_: Exception) {
+                    } catch (_: Throwable) {
                         row.recordId
                     }
                     pairs.add(row.recordId to title)
@@ -192,7 +219,7 @@ class MainActivity : AppCompatActivity() {
                 textStatus.text = if (pairs.isEmpty()) "暂无条目" else "${pairs.size} 条"
             } catch (e: CancellationException) {
                 throw e
-            } catch (_: Exception) {
+            } catch (_: Throwable) {
                 textStatus.text = "列表加载失败，请锁定后重试"
                 adapter.submit(emptyList())
             }

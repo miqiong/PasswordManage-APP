@@ -21,7 +21,7 @@ android {
         applicationId = "com.example.vault"
         minSdk = 28
         targetSdk = 34
-        versionCode = 10001
+        versionCode = 10002
         versionName = "1.0.0.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
