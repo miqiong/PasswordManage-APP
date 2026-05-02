@@ -45,11 +45,10 @@ abstract class VaultDatabase : RoomDatabase() {
             SQLiteDatabase.loadLibs(context)
             val passphraseAscii =
                 Base64.encodeToString(rawDbKey32, Base64.NO_WRAP).toByteArray(Charsets.US_ASCII)
-            // [SupportFactory] 保存的是同一 byte[] 引用；Room 首次访问 DB 时才真正打开。
-            // 若在此处 wipe，口令在打开前已被清零，会触发 “passphrase appears to be cleared” 或解密失败。
-            // 默认 clearPassphrase=true：SQLCipher 在首次成功打开后会自行清零该数组。
-            val factory = SupportFactory(passphraseAscii)
-            return Room.databaseBuilder(
+            // 与 Room 组合时勿在首次打开前 wipe 本数组（与 SupportFactory 共享引用）。
+            // clearPassphrase=false：Room 可能在同一会话内多次 getWritableDatabase；若 true，首次打开后口令被清零会导致后续打开失败。
+            val factory = SupportFactory(passphraseAscii, null, false)
+            val db = Room.databaseBuilder(
                 context.applicationContext,
                 VaultDatabase::class.java,
                 "vault.db"
@@ -57,6 +56,9 @@ abstract class VaultDatabase : RoomDatabase() {
                 .openHelperFactory(factory)
                 .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
                 .build()
+            // build() 不保证立即落盘打开；延迟到 reloadList 时抛出的异常在协程中未捕获会直接导致闪退。
+            db.openHelper.writableDatabase.query("SELECT 1").close()
+            return db
         }
     }
 }

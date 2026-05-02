@@ -16,6 +16,7 @@ import com.example.vault.data.VaultDatabase
 import com.example.vault.data.VaultRepository
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.textfield.TextInputEditText
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -173,22 +174,28 @@ class MainActivity : AppCompatActivity() {
         val session = (application as VaultApp).session ?: return
         textStatus.text = "加载中…"
         lifecycleScope.launch {
-            val rows = withContext(Dispatchers.IO) { session.repo.listRecords() }
-            val pairs = mutableListOf<Pair<String, String>>()
-            for (row in rows) {
-                val title = try {
-                    withContext(Dispatchers.Default) {
-                        // 仅取 title，不把 PlainRecord 存入 ViewModel / Activity 字段
-                        val plain = session.enc.decrypt(row, session.kek)
-                        plain.title.ifBlank { row.recordId }
+            try {
+                val rows = withContext(Dispatchers.IO) { session.repo.listRecords() }
+                val pairs = mutableListOf<Pair<String, String>>()
+                for (row in rows) {
+                    val title = try {
+                        withContext(Dispatchers.Default) {
+                            val plain = session.enc.decrypt(row, session.kek)
+                            plain.title.ifBlank { row.recordId }
+                        }
+                    } catch (_: Exception) {
+                        row.recordId
                     }
-                } catch (_: Exception) {
-                    row.recordId
+                    pairs.add(row.recordId to title)
                 }
-                pairs.add(row.recordId to title)
+                adapter.submit(pairs)
+                textStatus.text = if (pairs.isEmpty()) "暂无条目" else "${pairs.size} 条"
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                textStatus.text = "列表加载失败，请锁定后重试"
+                adapter.submit(emptyList())
             }
-            adapter.submit(pairs)
-            textStatus.text = if (pairs.isEmpty()) "暂无条目" else "${pairs.size} 条"
         }
     }
 
