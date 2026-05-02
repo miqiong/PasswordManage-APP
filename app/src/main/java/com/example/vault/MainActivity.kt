@@ -80,66 +80,77 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
-        val pwd = pwdText.toByteArray(Charsets.UTF_8)
-        try {
-            val mpv = MasterPasswordVerifier()
+        val existed = vaultExists
+        btnPrimary.isEnabled = false
+        lifecycleScope.launch {
+            val pwd = pwdText.toByteArray(Charsets.UTF_8)
             try {
-                if (!vaultExists) {
-                    val salt = ByteArray(16).also { SecureRandom().nextBytes(it) }
+                val outcome = withContext(Dispatchers.Default) {
                     try {
-                        val (kek, verifier) = mpv.deriveKekAndVerifier(pwd, salt)
-                        try {
-                            metaStore.write(salt, verifier)
-                            openVault(kek, mpv)
-                        } finally {
-                            SecureMemoryUtils.wipe(verifier)
-                            SecureMemoryUtils.wipe(kek)
-                        }
-                    } finally {
-                        SecureMemoryUtils.wipe(salt)
-                    }
-                } else {
-                    val meta = metaStore.read()
-                    if (meta == null) {
-                        textError.text = "无法读取保管库元数据"
-                        textError.visibility = View.VISIBLE
-                        return
-                    }
-                    val (salt, verifier) = meta
-                    try {
-                        if (!mpv.verifyMasterPassword(pwd, salt, verifier)) {
-                            textError.text = "主密码错误"
-                            textError.visibility = View.VISIBLE
-                            return
-                        }
-                        val mk = mpv.deriveMasterKey(pwd, salt)
-                        try {
-                            val kek = mpv.deriveKek(mk)
+                        val mpv = MasterPasswordVerifier()
+                        if (!existed) {
+                            val salt = ByteArray(16).also { SecureRandom().nextBytes(it) }
                             try {
-                                openVault(kek, mpv)
+                                val (kek, verifier) = mpv.deriveKekAndVerifier(pwd, salt)
+                                try {
+                                    metaStore.write(salt, verifier)
+                                    UnlockOutcome.Ok(openVaultSession(kek, mpv))
+                                } finally {
+                                    SecureMemoryUtils.wipe(verifier)
+                                    SecureMemoryUtils.wipe(kek)
+                                }
                             } finally {
-                                SecureMemoryUtils.wipe(kek)
+                                SecureMemoryUtils.wipe(salt)
                             }
-                        } finally {
-                            SecureMemoryUtils.wipe(mk)
+                        } else {
+                            val meta = metaStore.read()
+                                ?: return@withContext UnlockOutcome.Err("无法读取保管库元数据")
+                            val (salt, verifier) = meta
+                            try {
+                                if (!mpv.verifyMasterPassword(pwd, salt, verifier)) {
+                                    return@withContext UnlockOutcome.Err("主密码错误")
+                                }
+                                val mk = mpv.deriveMasterKey(pwd, salt)
+                                try {
+                                    val kek = mpv.deriveKek(mk)
+                                    try {
+                                        UnlockOutcome.Ok(openVaultSession(kek, mpv))
+                                    } finally {
+                                        SecureMemoryUtils.wipe(kek)
+                                    }
+                                } finally {
+                                    SecureMemoryUtils.wipe(mk)
+                                }
+                            } finally {
+                                SecureMemoryUtils.wipe(salt)
+                                SecureMemoryUtils.wipe(verifier)
+                            }
                         }
-                    } finally {
-                        SecureMemoryUtils.wipe(salt)
-                        SecureMemoryUtils.wipe(verifier)
+                    } catch (_: Exception) {
+                        UnlockOutcome.Err("解锁失败，请重试")
                     }
                 }
-            } catch (_: Exception) {
-                // 避免异常直接导致闪退，向用户展示可恢复错误
-                textError.text = "解锁失败，请重试"
-                textError.visibility = View.VISIBLE
+                when (outcome) {
+                    is UnlockOutcome.Ok -> {
+                        (application as VaultApp).session = outcome.session
+                        panelUnlock.visibility = View.GONE
+                        panelList.visibility = View.VISIBLE
+                        reloadList()
+                    }
+                    is UnlockOutcome.Err -> {
+                        textError.text = outcome.message
+                        textError.visibility = View.VISIBLE
+                    }
+                }
+            } finally {
+                SecureMemoryUtils.wipe(pwd)
+                inputPassword.text?.clear()
+                btnPrimary.isEnabled = true
             }
-        } finally {
-            SecureMemoryUtils.wipe(pwd)
-            inputPassword.text?.clear()
         }
     }
 
-    private fun openVault(kek: ByteArray, mpv: MasterPasswordVerifier) {
+    private fun openVaultSession(kek: ByteArray, mpv: MasterPasswordVerifier): VaultSession {
         val dbKey = mpv.deriveDatabasePassphrase(kek)
         try {
             val db = VaultDatabase.create(applicationContext, dbKey)
@@ -147,14 +158,15 @@ class MainActivity : AppCompatActivity() {
             val crypto = CryptoManager()
             val enc = RecordEncryptor(crypto)
             val kekCopy = kek.copyOf()
-            (application as VaultApp).session = VaultSession(kekCopy, db, repo, crypto, enc, mpv)
-
-            panelUnlock.visibility = View.GONE
-            panelList.visibility = View.VISIBLE
-            reloadList()
+            return VaultSession(kekCopy, db, repo, crypto, enc, mpv)
         } finally {
             SecureMemoryUtils.wipe(dbKey)
         }
+    }
+
+    private sealed class UnlockOutcome {
+        data class Ok(val session: VaultSession) : UnlockOutcome()
+        data class Err(val message: String) : UnlockOutcome()
     }
 
     private fun reloadList() {
